@@ -1,5 +1,7 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from datetime import datetime, timedelta
 
 
 def get_grade_kb():
@@ -60,3 +62,58 @@ def get_anon_kb():
         ],
         resize_keyboard=True,
     )
+
+
+def get_hw_actions_kb(hw_id, has_solution=False):
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="➕ Добавить решение", callback_data=f"solve_{hw_id}"
+            )
+        ]
+    ]
+    if has_solution:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="📖 Посмотреть решения", callback_data=f"view_{hw_id}"
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_date_selection_kb():
+    today = datetime.now()
+    tomorrow = today + timedelta(days=1)
+    after_tomorrow = today + timedelta(days=2)
+
+    kb = [
+        [
+            InlineKeyboardButton(
+                text="На завтра", callback_data=f"date_{tomorrow.strftime("%Y-%m-%d")}"
+            ),
+            InlineKeyboardButton(
+                text="На послезавтра",
+                callback_data=f"date_{after_tomorrow.strftime("%Y-%m-%d")}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Другой день (внести вручную)", callback_data="date_manual"
+            )
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def get_solution_votes_kb(sol_id, ups=0, downs=0):
+    kb = [
+        [
+            InlineKeyboardButton(text=f"👍 {ups}", callback_data=f"vote_up_{sol_id}"),
+            InlineKeyboardButton(
+                text=f"👎 {downs}", callback_data=f"vote_down_{sol_id}"
+            ),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
