@@ -36,7 +36,8 @@ def get_letter_kb():
 def get_main_menu():
     kb = [
         [KeyboardButton(text="📚 Узнать ДЗ"), KeyboardButton(text="➕ Добавить ДЗ")],
-        [KeyboardButton(text="🏆 Топ учеников"), KeyboardButton(text="👤 Профиль")],
+        [KeyboardButton(text="👥 Мой класс"), KeyboardButton(text="👤 Профиль")],
+        [KeyboardButton(text="🏆 Топ учеников")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -117,3 +118,9 @@ def get_solution_votes_kb(sol_id, ups=0, downs=0):
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def get_finish_content_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Готово ✅")]], resize_keyboard=True
+    )

@@ -1,4 +1,5 @@
 from typing import Any, List, Dict, Optional, Union
+from datetime import datetime
 import aiosqlite
 
 
@@ -30,8 +31,8 @@ class Database:
             await db.commit()
             return cursor
 
+    # --- Создание всех таблиц в базе даных ---
     async def create_tables(self):
-        # Создание всех таблиц одним методом
         queries = [
             """CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -64,9 +65,8 @@ class Database:
                 homework_id INTEGER,
                 author_id INTEGER,
                 text TEXT,
-                photo_id TEXT,
                 is_anonymous INTEGER,
-                FOREIGN KEY (homework_id) REFERENCES homework (id)
+                FOREIGN KEY (homework_id) REFERENCES homework (id) ON DELETE CASCADE
             )""",
             """
             CREATE TABLE IF NOT EXISTS votes (
@@ -75,6 +75,14 @@ class Database:
                 vote_value INTEGER,
                 PRIMARY KEY (user_id, solution_id)
             )""",
+            """
+            CREATE TABLE IF NOT EXISTS media (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_id INTEGER,
+                parent_type TEXT,
+                file_id TEXT
+            )
+            """,
         ]
         for query in queries:
             await self._execute(query)
@@ -122,6 +130,24 @@ class Database:
             (value, user_id),
         )
 
+    async def get_top_users(self, limit: int = 5):
+        query = """
+            SELECT first_name, last_name, grade, letter, reputation
+            FROM users
+            ORDER BY reputation DESC
+            LIMIT ?
+        """
+        return await self._execute(query, (limit,), fetch=True)
+
+    async def get_class_users(self, grade: int, letter: str):
+        query = """
+            SELECT first_name, last_name, reputation
+            FROM users
+            WHERE grade = ? AND letter = ?
+            ORDER BY reputation DESC
+        """
+        return await self._execute(query, (grade, letter), fetch=True)
+
     # --- Работа с предметами ---
     async def get_subjects(self):
         return await self._execute("SELECT * FROM subjects", fetch=True)
@@ -164,10 +190,27 @@ class Database:
                    ORDER BY h.target_date ASC, h.created_at DESC"""
         return await self._execute(query, (grade, letter), fetch=True)
 
+    async def delete_expired_homework(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        await self._execute(
+            """
+                    DELETE FROM media 
+                    WHERE parent_type = 'solution' 
+                    AND parent_id IN (SELECT id FROM solutions WHERE homework_id IN (SELECT id FROM homework WHERE target_date < ?))
+                """,
+            (today,),
+        )
+
+        query = "DELETE FROM homework WHERE target_date < ?"
+        await self._execute(query, (today,))
+
     # --- Работа с решениями ---
-    async def add_solution(self, hw_id, author_id, text, photo_id, is_anonymous):
-        query = "INSERT INTO solutions (homework_id, author_id, text, photo_id, is_anonymous) VALUES (?, ?, ?, ?, ?)"
-        await self._execute(query, (hw_id, author_id, text, photo_id, is_anonymous))
+    async def add_solution(self, homework_id, author_id, text, is_anonymous):
+        query = "INSERT INTO solutions (homework_id, author_id, text, is_anonymous) VALUES (?, ?, ?, ?)"
+        cursor = await self._execute(
+            query, (homework_id, author_id, text, is_anonymous)
+        )
+        return cursor.lastrowid
 
     async def get_solutions(self, hw_id):
         return await self._execute(
@@ -187,6 +230,25 @@ class Database:
             "SELECT * FROM solutions WHERE id = ?", (sol_id,), fetchone=True
         )
 
+    # --- Работа с медиа ---
+    async def add_solution_media(
+        self,
+        solution_id: int,
+        file_id: str,
+    ):
+        query = "INSERT INTO media (parent_id, parent_type, file_id) VALUES (?, 'solution', ?)"
+        await self._execute(
+            query,
+            (
+                solution_id,
+                file_id,
+            ),
+        )
+
+    async def get_media(self, parent_id: int, parent_type: str):
+        query = "SELECT file_id FROM media WHERE parent_id = ?AND parent_type = ?"
+        return await self._execute(query, (parent_id, parent_type), fetch=True)
+
     # --- Работа с голосами ---
     async def add_vote(self, user_id, sol_id, vote_value):
         try:
@@ -199,14 +261,16 @@ class Database:
             return False
 
     async def get_solution_votes(self, sol_id):
-        ups = await self._execute(
-            "SELECT COUNT(*) as count FROM votes WHERE solution_id = ? AND vote_type = 1",
-            (sol_id,),
-            fetchone=True,
-        )
-        downs = await self._execute(
-            "SELECT COUNT(*) as count FROM votes WHERE solution_id = ? AND vote_type = -1",
-            (sol_id,),
-            fetchone=True,
-        )
-        return ups["count"], downs["count"]
+        query = """
+            SELECT
+                SUM(CASE WHEN vote_value = 1 THEN 1 ELSE 0 END) as ups,
+                SUM(CASE WHEN vote_value = -1 THEN 1 ELSE 0 END) as downs
+            FROM votes
+            WHERE solution_id = ?
+        """
+        res = await self._execute(query, (sol_id,), fetchone=True)
+
+        ups = res["ups"] if res and res["ups"] else 0
+        downs = res["downs"] if res and res["downs"] else 0
+
+        return ups, downs

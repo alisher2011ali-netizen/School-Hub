@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, InputMediaPhoto
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
@@ -97,6 +97,13 @@ async def show_profile(message: Message, db: Database):
 
 @router.message(F.text == "➕ Добавить ДЗ")
 async def start_add_hw(message: Message, state: FSMContext, db: Database):
+    user = await db.get_user(message.from_user.id)
+    if not user:
+        await message.answer(
+            "<b>Упс!</b> Похоже, ты еще не зарегистрирован.\nДля регистрации напиши /start"
+        )
+        return
+
     subjects = await db.get_subjects()
     await message.answer(
         "<b>Выберите предмет:</b>", reply_markup=get_subjects_kb(subjects)
@@ -158,11 +165,28 @@ async def data_adding(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddHomework.waiting_for_manual)
 async def manual_data_adding(message: Message, state: FSMContext):
-    await state.update_data(date=message.text)
+    user_input = message.text.strip()
 
-    await message.answer("Опубликовать анонимно?", reply_markup=get_anon_kb())
+    try:
+        date_obj = datetime.strptime(user_input, "%d.%m")
 
-    await state.set_state(AddHomework.waiting_for_anon)
+        current_year = datetime.now().year
+        date_obj = date_obj.replace(year=current_year)
+
+        formatted_date = date_obj.strftime("%Y-%m-%d")
+
+        await state.update_data(date=formatted_date)
+
+        await message.answer(
+            f"Дата сохранена как: {formatted_date}\nОпубликовать анонимно?",
+            reply_markup=get_anon_kb(),
+        )
+        await state.set_state(AddHomework.waiting_for_anon)
+
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат! Введите дату как ДД.ММ (например, 20.01):"
+        )
 
 
 @router.message(
@@ -205,6 +229,7 @@ async def save_homework(message: Message, state: FSMContext, db: Database):
 
 @router.message(F.text == "📚 Узнать ДЗ")
 async def show_homework(message: Message, db: Database):
+    await db.delete_expired_homework()
     if not message.from_user:
         return
 
@@ -259,46 +284,75 @@ async def handle_solve_button(callback: CallbackQuery, state: FSMContext):
     if not callback.data or not callback.message:
         return
     hw_id = callback.data.split("_")[1]
-    await state.update_data(current_hw_id=hw_id)
+    await state.update_data(hw_id=hw_id)
 
     await callback.message.answer("Отлично! Пришли текст решения или фото:")
     await state.set_state(AddSolution.waiting_for_content)
     await callback.answer()
 
 
-@router.message(AddSolution.waiting_for_content)
-async def solution_content_added(message: Message, state: FSMContext):
-    if message.photo:
-        await state.update_data(
-            sol_text=message.caption, sol_photo=message.photo[-1].file_id
-        )
-    else:
-        await state.update_data(sol_text=message.text, sol_photo=None)
+@router.message(AddSolution.waiting_for_content, F.text == "Готово ✅")
+async def solution_content_completly_added(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("sol_photos") and not data.get("sol_text"):
+        await message.answer("Вы не прислали ни текста, ни фото. Пришлите что-нибудь!")
+        return
 
-    await message.answer("Опубликовать анонимно?", reply_markup=get_anon_kb())
+    await message.answer(
+        "Все данные приняты! Опубликовать Анонимно?", reply_markup=get_anon_kb()
+    )
+
     await state.set_state(AddSolution.waiting_for_anon)
+
+
+@router.message(AddSolution.waiting_for_content)
+async def solution_content_adding(message: Message, state: FSMContext):
+    data = await state.get_data()
+
+    photos = data.get("sol_photos", [])
+
+    if message.photo:
+        photos.append(message.photo[-1].file_id)
+        if message.caption:
+            await state.update_data(sol_text=message.caption)
+    elif message.text:
+        await state.update_data(sol_text=message.text)
+
+    await state.update_data(sol_photos=photos)
+
+    await message.answer(
+        f"Фото добавлено (всего: {len(photos)}). Пришлите еще или нажмите 'Готово ✅'",
+        reply_markup=get_finish_content_kb(),
+    )
 
 
 @router.message(
     AddSolution.waiting_for_anon, F.text.in_(["Анонимно", "От своего имени"])
 )
-async def finish_solution(message: Message, state: FSMContext, db: Database):
+async def publish_solution(message: Message, state: FSMContext, db: Database):
     if not message.from_user:
         return
 
+    data = await state.get_data()
     is_anon = 1 if message.text == "Анонимно" else 0
 
-    data = await state.get_data()
-
-    await db.add_solution(
-        hw_id=data["current_hw_id"],
-        text=data["sol_text"],
-        photo_id=data["sol_photo"],
+    sol_id = await db.add_solution(
+        homework_id=data["hw_id"],
         author_id=message.from_user.id,
+        text=data.get("sol_text"),
         is_anonymous=is_anon,
     )
 
+    photos = data.get("sol_photos", [])
+    for f_id in photos:
+        await db.add_solution_media(sol_id, f_id)
+
+    await message.answer(
+        "✅ Решение успешно опубликовано!", reply_markup=get_main_menu()
+    )
     await db.update_reputation(message.from_user.id, 5)
+
+    await state.clear()
 
 
 @router.callback_query(F.data.startswith("view_"))
@@ -307,6 +361,7 @@ async def view_solutions(callback: CallbackQuery, db: Database):
     solutions = await db.get_solutions(hw_id)
 
     if not solutions:
+        await callback.answer("Решений пока нет.", show_alert=True)
         return
 
     await callback.answer(f"🔎 Найдено решений: {len(solutions)}")
@@ -318,18 +373,28 @@ async def view_solutions(callback: CallbackQuery, db: Database):
             if user:
                 author_text = f"{user['first_name']} {user['last_name']}"
 
-        caption = f"✅ <b>Решение от:</b> {author_text}\n\n{sol['text'] or '<i>(Без текста)</i>'}"
+        caption_text = f"✅ <b>Решение от:</b> {author_text}\n\n{sol['text'] or '<i>(Без текста)</i>'}"
 
-        if sol["photo_id"]:
-            await callback.message.answer_photo(
-                sol["photo_id"],
-                caption=caption,
-                reply_markup=get_solution_votes_kb(sol["id"]),
-            )
+        media_files = await db.get_media(sol["id"], "solution")
+
+        ups, downs = await db.get_solution_votes(sol["id"])
+        kb = get_solution_votes_kb(sol["id"], ups, downs)
+
+        if media_files:
+            media_group = []
+            for i, file_rec in enumerate(media_files):
+                if i == 0:
+                    media_group.append(
+                        InputMediaPhoto(media=file_rec["file_id"], caption=caption_text)
+                    )
+                else:
+                    media_group.append(InputMediaPhoto(media=file_rec["file_id"]))
+
+            await callback.message.answer_media_group(media_group)
+            await callback.message.answer("Оцените решение: 👆", reply_markup=kb)
+
         else:
-            await callback.message.answer(caption)
-
-        await callback.answer()
+            await callback.message.answer(caption_text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("vote_"))
@@ -366,3 +431,51 @@ async def handle_vote(callback: CallbackQuery, db: Database):
         pass
 
     await callback.answer("Голос учтен!")
+
+
+@router.message(F.text == "🏆 Топ учеников")
+async def show_top_users(message: Message, db: Database):
+    top_users = await db.get_top_users(5)
+
+    if not top_users:
+        await message.answer("Список лидеров пока пуст.")
+        return
+
+    text = "<b>🏆 Топ-5 активных учеников:</b>\n\n"
+
+    medals = ["🥇", "🥈", "🥉"]
+
+    for i, user in enumerate(top_users):
+        place_icon = medals[i] if i < 3 else f"{i+1}"
+        text += (
+            f"{place_icon} {user['first_name']} {user['last_name']} "
+            f"({user['grade']}-{user['letter']}) — <b>{user['reputation']}</b> ⭐\n"
+        )
+
+    await message.answer(text)
+
+
+@router.message(F.text == "👥 Мой класс")
+async def show_class_stats(message: Message, db: Database):
+    user = await db.get_user(message.from_user.id)
+    if not user:
+        await message.answer(
+            "<b>Упс!</b> Похоже, ты еще не зарегистрирован.\nДля регистрации напиши /start"
+        )
+        return
+
+    students = await db.get_class_users(user["grade"], user["letter"])
+
+    text = f"📊 <b>Статистика класса {user['grade']}-{user['letter']}:</b>\n\n"
+
+    for i, st in enumerate(students):
+        if st["reputation"] > 0:
+            status = "📈"
+        elif st["reputation"] < 0:
+            status = "📉"
+        else:
+            status = "◻"
+
+        text += f"{status} {st['first_name']} {st['last_name']}: <b>{st['reputation']}</b>\n"
+
+    await message.answer(text)
