@@ -82,13 +82,24 @@ async def show_profile(message: Message, db: Database):
         )
         return
 
+    reputation = user["reputation"]
+    if reputation < 50:
+        rank = "Новичок 👶"
+    elif reputation < 150:
+        rank = "Помогатор 🛠️"
+    elif reputation < 300:
+        rank = "Знаток 🧠"
+    else:
+        rank = "Легенда школы 👑"
+
     text = (
         f"👤 <b>Твой профиль</b>\n"
         f"━━━━━━━━━━━━━━\n"
-        f"<b>Имя:</b> {user['first_name']} {user['last_name']}\n"
+        f"👋 <b>Имя:</b> {user['first_name']} {user['last_name']}\n"
         f"🏫 <b>Класс:</b> {user['grade']}-{user['letter']}\n"
         f"🌟 <b>Репутация:</b> <code>{user['reputation']}</code>\n"
-        f"🆔 <b>ID:</b> <code>{user['user_id']}</code>\n\n"
+        f"🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
+        f"🏆 <b>Ранг:</b> {rank}\n\n"
         f"<i>Статус: {'Администратор' if user['is_admin'] else 'Ученик'}</i>"
     )
 
