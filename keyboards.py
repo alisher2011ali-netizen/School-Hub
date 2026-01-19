@@ -4,6 +4,14 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from datetime import datetime, timedelta
 
 
+def get_confirm_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="✅ Да"), KeyboardButton(text="❌ Нет")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 def get_grade_kb():
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -37,7 +45,7 @@ def get_letter_kb():
     return kb
 
 
-def get_main_menu():
+def get_main_menu_kb():
     kb = [
         [KeyboardButton(text="📚 Узнать ДЗ"), KeyboardButton(text="➕ Добавить ДЗ")],
         [KeyboardButton(text="👥 Мой класс"), KeyboardButton(text="👤 Профиль")],
@@ -85,6 +93,13 @@ def get_hw_actions_kb(hw_id, has_solution=False):
                 )
             ]
         )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="🚩 Пожаловаться", callback_data=f"report_hw_{hw_id}"
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -119,7 +134,12 @@ def get_solution_votes_kb(sol_id, ups=0, downs=0):
             InlineKeyboardButton(
                 text=f"👎 {downs}", callback_data=f"vote_down_{sol_id}"
             ),
-        ]
+        ],
+        [
+            InlineKeyboardButton(
+                text="🚩 Пожаловаться", callback_data=f"report_sol_{sol_id}"
+            )
+        ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 

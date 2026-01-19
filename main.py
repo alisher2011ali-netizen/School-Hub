@@ -23,6 +23,7 @@ db = Database("school_hub.db")
 async def main():
     await db.create_tables()
     await db.seed_subjects()
+    await bot.delete_webhook(drop_pending_updates=True)
 
     dp.include_router(user_router)
 

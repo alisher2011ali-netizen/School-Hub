@@ -1,14 +1,37 @@
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, InputMediaPhoto
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
+from dotenv import load_dotenv
+import os
+import re
 
 from database import Database
 from states import *
 from keyboards import *
 
+load_dotenv()
+
 router = Router()
+SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID"))
+
+if SUPER_ADMIN_ID is None:
+    print("Переменная SUPER_ADMIN_ID не найдена в переменных окружения")
+
+
+@router.message(Command("cancel"))
+@router.message(F.text.casefold() == "отмена")
+async def cancel_handler(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+
+    await state.clear()
+    await message.answer(
+        "Действие отменено. Мы снова в главном меню.",
+        reply_markup=get_main_menu_kb(),
+    )
 
 
 @router.message(CommandStart())
@@ -20,7 +43,7 @@ async def cmd_start(message: Message, state: FSMContext, db: Database):
     if user:
         await message.answer(
             f"Ты уже зарегистрирован. Твой класс: {user['grade']}-{user['letter']}",
-            reply_markup=get_main_menu(),
+            reply_markup=get_main_menu_kb(),
         )
         return
 
@@ -33,46 +56,97 @@ async def cmd_start(message: Message, state: FSMContext, db: Database):
 
 @router.message(Registration.waiting_for_grade)
 async def grade_chosen(message: Message, state: FSMContext):
-    await state.update_data(chosen_grade=message.text)
+    if len(message.text) > 10:
+        await message.answer(
+            "Слишком длинный текст. Напиши просто класс, например '9А'."
+        )
+        return
 
-    await message.answer("Отлично! А какая буква?", reply_markup=get_letter_kb())
-    await state.set_state(Registration.waiting_for_letter)
+    input_text = message.text.replace(" ", "").upper()
+
+    full_match = re.match(r"(\d+)([А-ЯA-Z])", input_text)
+
+    if full_match:
+        grade, letter = full_match.groups()
+        await state.update_data(chosen_grade=grade, chosen_letter=letter)
+
+        await message.answer(
+            f"Записал, класс: <b>{grade}</b>, буква: <b>{letter}</b>. Всё верно?",
+            reply_markup=get_confirm_kb(),
+        )
+        await state.set_state(Registration.waiting_for_confirm)
+        return
+
+    if input_text.isdigit():
+        await state.update_data(chosen_grade=input_text)
+        await message.answer(
+            "Теперь выбери или напиши букву класса:",
+            reply_markup=get_letter_kb(),
+        )
+        await state.set_state(Registration.waiting_for_letter)
+        return
+
+    await message.answer(
+        "Не совсем понял. Напиши, пожалуйста, в формате '9А' или выбери на кнопках."
+    )
+
+
+@router.message(Registration.waiting_for_confirm)
+async def confirm_registration(message: Message, state: FSMContext):
+    if message.text == "✅ Да, верно":
+        await message.answer(
+            "Отлично! Теперь введи свои <b>Имя и Фамилию</b>:",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode="HTML",
+        )
+        await state.set_state(Registration.waiting_for_name)
+    else:
+        await message.answer(
+            "Хорошо, давай попробуем еще раз. Введи свой класс (например, 9):",
+            reply_markup=get_grade_kb(),
+        )
+        await state.set_state(Registration.waiting_for_grade)
 
 
 @router.message(Registration.waiting_for_letter)
-async def letter_chosen(message: Message, state: FSMContext):
+async def confirm_registration(message: Message, state: FSMContext):
     await state.update_data(chosen_letter=message.text)
 
-    await message.answer("Отлично! Осталось последнее, введи свое имя и фамилию: ")
+    await message.answer(
+        "Отлично! Теперь введи свои <b>Имя и Фамилию</b>:",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="HTML",
+    )
     await state.set_state(Registration.waiting_for_name)
 
 
 @router.message(Registration.waiting_for_name)
 async def name_chosen(message: Message, state: FSMContext, db: Database):
-    if not message.from_user or not message.text:
+    if len(message.text) > 40:
+        await message.answer("Слишком длинное имя. Попробуй покороче.")
         return
-    user_data = await state.get_data()
-    try:
-        first_name = message.text.split()[0]
-        last_name = message.text.split()[1]
-    except IndexError:
-        await message.answer(
-            "Укажите <b>Имя и Фамилию через пробел</b>, например: Дмитрий Смиронов"
-        )
 
-    grade = user_data["chosen_grade"]
-    letter = user_data["chosen_letter"]
+    names = message.text.split()
+    if len(names) < 2:
+        await message.answer("Пожалуйста, введи и Имя, и Фамилию через пробел.")
+        return
 
+    first_name = names[0][:20]
+    last_name = names[1][:20]
+
+    data = await state.get_data()
     await db.register_user(
-        message.from_user.id, first_name, last_name, int(grade), letter
+        user_id=message.from_user.id,
+        first_name=first_name,
+        last_name=last_name,
+        grade=data["chosen_grade"],
+        letter=data["chosen_letter"],
     )
 
     await message.answer(
-        f"Регистрация завершена! Класс: {grade}-{letter}",
-        reply_markup=ReplyKeyboardRemove(),
+        f"Приятно познакомиться, {first_name}! Регистрация завершена. 🎉. Выбирай действие:",
+        reply_markup=get_main_menu_kb(),
     )
-
-    await message.answer("Выбирай действие:", reply_markup=get_main_menu())
     await state.clear()
 
 
@@ -97,6 +171,10 @@ async def show_profile(message: Message, db: Database):
         rank = "Знаток 🧠"
     else:
         rank = "Легенда школы 👑"
+    if user["is_banned"]:
+        status = "(Забанен)"
+    else:
+        status = ""
 
     text = (
         f"👤 <b>Твой профиль</b>\n"
@@ -107,6 +185,7 @@ async def show_profile(message: Message, db: Database):
         f"🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
         f"🏆 <b>Ранг:</b> {rank}\n\n"
         f"<i>Статус: {'Администратор' if user['is_admin'] else 'Ученик'}</i>"
+        f" <i>{status}</i>"
     )
 
     await message.answer(text)
@@ -119,6 +198,10 @@ async def start_add_hw(message: Message, state: FSMContext, db: Database):
         await message.answer(
             "<b>Упс!</b> Похоже, ты еще не зарегистрирован.\nДля регистрации напиши /start"
         )
+        return
+
+    if user.get("is_banned"):
+        await message.answer("⛔ Вы заблокированы администрацией.")
         return
 
     subjects = await db.get_subjects()
@@ -216,12 +299,6 @@ async def save_homework(message: Message, state: FSMContext, db: Database):
     data = await state.get_data()
     user = await db.get_user(message.from_user.id)
 
-    if not user:
-        await message.answer(
-            "<b>Упс!</b> Похоже, ты еще не зарегистрирован.\nДля регистрации напиши /start"
-        )
-        return
-
     subject = await db.get_subject_by_name(data["subject_name"])
     if not subject:
         return
@@ -239,7 +316,7 @@ async def save_homework(message: Message, state: FSMContext, db: Database):
     )
 
     await message.answer(
-        "✅ <b>Задание успешно добавлено!</b>", reply_markup=get_main_menu()
+        "✅ <b>Задание успешно добавлено!</b>", reply_markup=get_main_menu_kb()
     )
     await state.clear()
 
@@ -296,10 +373,52 @@ async def show_homework(message: Message, db: Database):
             )
 
 
+@router.callback_query(F.data.startswith("report_hw"))
+async def handle_hw_report(callback: CallbackQuery, db: Database, bot: Bot):
+    await callback.answer("Жалоба отправлена модераторам", show_alert=True)
+
+    hw_id = int(callback.data.replace("report_hw_", ""))
+    reporter_id = callback.from_user.id
+
+    hw = await db.get_homework_by_id(hw_id)
+    reason = "Жалоба на домашнее задание"
+    await db.add_report(
+        reporter_id=reporter_id,
+        target_id=hw["author_id"],
+        type="homework",
+        sol_or_hw_id=hw_id,
+        reason=reason,
+    )
+
+    await bot.send_message(
+        SUPER_ADMIN_ID,
+        f"⚠️ <b>Жалоба на <i>задание</i>!</b>\n"
+        f"ID домашнего задания: <code>{hw_id}</code>\n"
+        f"Отправитель: {callback.from_user.full_name}\n"
+        f"На кого жалоба: {hw["author_id"]}\n"
+        f"Текст жалобы:\n<q>{reason}</q>\n\n"
+        f"Используй /ban <code>{callback.hw["author_id"]}</code> или /del_sol <code>{hw_id}</code>",
+        parse_mode="HTML",
+    )
+
+
 @router.callback_query(F.data.startswith("solve_"))
-async def handle_solve_button(callback: CallbackQuery, state: FSMContext):
+async def handle_solve_button(callback: CallbackQuery, state: FSMContext, db: Database):
     if not callback.data or not callback.message:
         return
+    user = await db.get_user(callback.from_user.id)
+
+    if not user:
+        await callback.answer("❌ Сначала зарегистрируйтесь в боте!", show_alert=True)
+        return
+
+    if user.get("is_banned"):
+        await callback.answer(
+            "⛔ Вы забанены из-за нарушений. Вы в режиме 'Только чтение'",
+            show_alert=True,
+        )
+        return
+
     hw_id = callback.data.split("_")[1]
     await state.update_data(hw_id=hw_id)
 
@@ -365,7 +484,7 @@ async def publish_solution(message: Message, state: FSMContext, db: Database):
         await db.add_solution_media(sol_id, f_id)
 
     await message.answer(
-        "✅ Решение успешно опубликовано!", reply_markup=get_main_menu()
+        "✅ Решение успешно опубликовано!", reply_markup=get_main_menu_kb()
     )
     await db.update_reputation(message.from_user.id, 5)
 
@@ -416,6 +535,15 @@ async def view_solutions(callback: CallbackQuery, db: Database):
 
 @router.callback_query(F.data.startswith("vote_"))
 async def handle_vote(callback: CallbackQuery, db: Database):
+    user = await db.get_user(callback.message.from_user.id)
+
+    if user.get("is_banned"):
+        await callback.answer(
+            "⛔ Вы забанены из-за нарушений. Вы не можете голосовать",
+            show_alert=True,
+        )
+        return
+
     parts = callback.data.split("_")
     action = parts[1]
     sol_id = parts[2]
@@ -448,6 +576,22 @@ async def handle_vote(callback: CallbackQuery, db: Database):
         pass
 
     await callback.answer("Голос учтен!")
+
+
+@router.callback_query(F.data.startswith("report_sol"))
+async def handle_sol_report(callback: CallbackQuery, bot: Bot):
+    sol_id = int(callback.data.replace("report_sol_", ""))
+
+    await callback.answer("Жалоба отправлена модераторам", show_alert=True)
+
+    await bot.send_message(
+        SUPER_ADMIN_ID,
+        f"⚠️ <b>Жалоба на решение!</b>\n"
+        f"ID решения: <code>{sol_id}</code>\n"
+        f"Отправитель: {callback.from_user.full_name}\n\n"
+        f"Используй /ban <code>{callback.from_user.id}</code> или /del_sol <code>{sol_id}</code>",
+        parse_mode="HTML",
+    )
 
 
 @router.message(F.text == "🏆 Топ учеников")
@@ -496,3 +640,110 @@ async def show_class_stats(message: Message, db: Database):
         text += f"{status} {st['first_name']} {st['last_name']}: <b>{st['reputation']}</b>\n"
 
     await message.answer(text)
+
+
+@router.message(Command("ban"))
+async def start_ban_user(message: Message, state: FSMContext, db: Database):
+    user = await db.get_user(message.from_user.id)
+
+    if user["is_admin"] == 0:
+        await message.answer("❌ У вас нет прав админа.")
+        return
+
+    await message.answer("Введи ID пользователя для <b>БАНА</b>:")
+
+    await state.set_state(BanUser.waiting_for_ban_id)
+
+
+@router.message(BanUser.waiting_for_ban_id)
+async def process_ban_user(message: Message, state: FSMContext, db: Database):
+    if not message.text.isdigit():
+        await message.answer("ID должен состоять только из цифр. Попробуй еще раз.")
+        return
+
+    user = await db.get_user(message.text)
+
+    if not user:
+        await message.answer("❌ Пользователь с таким ID не найден в базе.")
+        await state.clear()
+        return
+
+    if user.get("is_admin"):
+        await message.answer("❌ Вы не можете забанить админа.")
+        await state.clear()
+        return
+
+    await db.ban_user(int(message.text))
+
+    await message.answer(
+        f"⛔ Пользователь <code>{message.text}</code> успешно <b>ЗАБАНЕН</b>!",
+        reply_markup=get_main_menu_kb(),
+    )
+    await state.clear()
+
+
+@router.message(Command("unban"))
+async def start_unban_user(message: Message, state: FSMContext, db: Database):
+    user = await db.get_user(message.from_user.id)
+
+    if user["is_admin"] == 0:
+        await message.answer("❌ У вас нет прав админа.")
+        return
+
+    await message.answer("Введи ID пользователя для <b>РАЗБАНА</b>:")
+    await state.set_state(BanUser.waiting_for_unban_id)
+
+
+@router.message(BanUser.waiting_for_unban_id)
+async def process_unban_user(message: Message, state: FSMContext, db: Database):
+    if not message.text.isdigit():
+        await message.answer("ID должен состоять только из цифр.")
+        return
+
+    await db.unban_user(int(message.text))
+
+    await message.answer(
+        f"✅ Пользователь <code>{message.text}</code> успешно <b>РАЗБАНЕН</b>!",
+        reply_markup=get_main_menu_kb(),
+    )
+    await state.clear()
+
+
+@router.message(Command("promote"))
+async def promote_user(message: Message, state: FSMContext):
+    if message.from_user.id != SUPER_ADMIN_ID:
+        await message.answer("❌ Эта команда доступна только главному админу.")
+        return
+
+    await message.answer(
+        "Введи ID пользователя, которого хочешь сделать админом или убрать его статус админа:"
+    )
+    await state.set_state(BanUser.waiting_for_promote_id)
+
+
+@router.message(BanUser.waiting_for_promote_id)
+async def process_promote(message: Message, state: FSMContext, db: Database):
+    if not message.text.isdigit():
+        await message.answer("Введи корректный ID.")
+        return
+
+    user = await db.get_user(int(message.text))
+
+    if not user:
+        await message.answer("Юзер не найден, его нет в базе данных.")
+        return
+
+    await state.update_data(id=message.text)
+    await message.answer("Сделать админом или убрать статус админа (0 или 1):")
+    await state.set_state(BanUser.waiting_for_promote_status)
+
+
+@router.message(BanUser.waiting_for_promote_status)
+async def set_admin_status(message: Message, state: FSMContext, db: Database):
+    data = await state.get_data()
+
+    status = int(message.text)
+    await db.set_admin_status(user_id=data["id"], status=status)
+    text = f"✅ Пользователь <code>{data['id']}</code> {"теперь" if status == 1 else "больше не"} администратор!"
+    await message.answer(text, reply_markup=get_main_menu_kb())
+    await state.clear()

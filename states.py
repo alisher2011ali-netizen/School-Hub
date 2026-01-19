@@ -5,6 +5,7 @@ class Registration(StatesGroup):
     waiting_for_grade = State()
     waiting_for_letter = State()
     waiting_for_name = State()
+    waiting_for_confirm = State()
 
 
 class AddHomework(StatesGroup):
@@ -19,3 +20,10 @@ class AddHomework(StatesGroup):
 class AddSolution(StatesGroup):
     waiting_for_content = State()
     waiting_for_anon = State()
+
+
+class BanUser(StatesGroup):
+    waiting_for_ban_id = State()
+    waiting_for_unban_id = State()
+    waiting_for_promote_id = State()
+    waiting_for_promote_status = State()

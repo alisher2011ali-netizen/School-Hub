@@ -41,7 +41,8 @@ class Database:
                 grade INTEGER,
                 letter TEXT,
                 reputation INTEGER DEFAULT 0,
-                is_admin INTEGER DEFAULT 0
+                is_admin INTEGER DEFAULT 0,
+                is_banned INTEGER DEFAULT 0
             )""",
             """CREATE TABLE IF NOT EXISTS subjects (
                 id INTEGER PRIMARY KEY,
@@ -81,6 +82,17 @@ class Database:
                 parent_id INTEGER,
                 parent_type TEXT,
                 file_id TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reporter_id INTEGER,
+                target_id INTEGER,
+                type TEXT,
+                sol_or_hw_id INTEGER,
+                reason TEXT,
+                status TEXT DEFAULT 'open'
             )
             """,
         ]
@@ -148,6 +160,21 @@ class Database:
         """
         return await self._execute(query, (grade, letter), fetch=True)
 
+    async def ban_user(self, user_id):
+        await self._execute(
+            "UPDATE users SET is_banned = 1 WHERE user_id = ?", (user_id,)
+        )
+
+    async def unban_user(self, user_id):
+        await self._execute(
+            "UPDATE users SET is_banned = 0 WHERE user_id = ?", (user_id,)
+        )
+
+    async def set_admin_status(self, user_id, status):
+        await self._execute(
+            "UPDATE users SET is_admin = ? WHERE user_id = ?", (status, user_id)
+        )
+
     # --- Работа с предметами ---
     async def get_subjects(self):
         return await self._execute("SELECT * FROM subjects", fetch=True)
@@ -158,6 +185,19 @@ class Database:
         )
 
     # --- Работа с домашкой ---
+    async def delete_expired_homework(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        await self._execute(
+            """
+                    DELETE FROM media 
+                    WHERE parent_type = 'solution' 
+                    AND parent_id IN (SELECT id FROM solutions WHERE homework_id IN (SELECT id FROM homework WHERE target_date < ?))
+                """,
+            (today,),
+        )
+        query = "DELETE FROM homework WHERE target_date < ?"
+        await self._execute(query, (today,))
+
     async def add_homework(
         self,
         subject_id,
@@ -190,19 +230,8 @@ class Database:
                    ORDER BY h.target_date ASC, h.created_at DESC"""
         return await self._execute(query, (grade, letter), fetch=True)
 
-    async def delete_expired_homework(self):
-        today = datetime.now().strftime("%Y-%m-%d")
-        await self._execute(
-            """
-                    DELETE FROM media 
-                    WHERE parent_type = 'solution' 
-                    AND parent_id IN (SELECT id FROM solutions WHERE homework_id IN (SELECT id FROM homework WHERE target_date < ?))
-                """,
-            (today,),
-        )
-
-        query = "DELETE FROM homework WHERE target_date < ?"
-        await self._execute(query, (today,))
+    async def get_homework_by_id(self, hw_id):
+        return await self._execute("SELECT * FROM homework WHERE id = ?", (hw_id,))
 
     # --- Работа с решениями ---
     async def add_solution(self, homework_id, author_id, text, is_anonymous):
@@ -274,3 +303,19 @@ class Database:
         downs = res["downs"] if res and res["downs"] else 0
 
         return ups, downs
+
+    async def add_report(
+        self,
+        reporter_id: int,
+        target_id: int,
+        type: str,
+        sol_or_hw_id: int,
+        reason: str,
+    ):
+        query = """
+            INSERT INTO reports (
+                reporter_id, target_id, type, sol_or_hw_id, reason
+                )
+            VALUES (?, ?, ?, ?, ?)
+        """
+        await self._execute(query, (reporter_id, target_id, type, sol_or_hw_id, reason))
