@@ -52,8 +52,14 @@ async def name_chosen(message: Message, state: FSMContext, db: Database):
     if not message.from_user or not message.text:
         return
     user_data = await state.get_data()
-    first_name = message.text.split()[0]
-    last_name = message.text.split()[1]
+    try:
+        first_name = message.text.split()[0]
+        last_name = message.text.split()[1]
+    except IndexError:
+        await message.answer(
+            "Укажите <b>Имя и Фамилию через пробел</b>, например: Дмитрий Смиронов"
+        )
+
     grade = user_data["chosen_grade"]
     letter = user_data["chosen_letter"]
 

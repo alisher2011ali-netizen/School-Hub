@@ -23,10 +23,14 @@ def get_letter_kb():
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [
+                KeyboardButton(text="Т"),
+                KeyboardButton(text="М"),
+                KeyboardButton(text="Э"),
+            ],
+            [
                 KeyboardButton(text="А"),
-                KeyboardButton(text="Б"),
-                KeyboardButton(text="В"),
-            ]
+                KeyboardButton(text="Я"),
+            ],
         ],
         resize_keyboard=True,
     )
