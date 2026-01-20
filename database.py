@@ -175,6 +175,18 @@ class Database:
             "UPDATE users SET is_admin = ? WHERE user_id = ?", (status, user_id)
         )
 
+    async def update_user_grade(self, user_id, grade, letter):
+        await self._execute(
+            "UPDATE users SET grade = ?, letter = ? WHERE user_id = ?",
+            (grade, letter, user_id),
+        )
+
+    async def update_user_name(self, user_id, first_name, last_name):
+        await self._execute(
+            "UPDATE users SET first_name = ?, last_name = ? WHERE user_id = ?",
+            (first_name, last_name, user_id),
+        )
+
     # --- Работа с предметами ---
     async def get_subjects(self):
         return await self._execute("SELECT * FROM subjects", fetch=True)
@@ -231,7 +243,9 @@ class Database:
         return await self._execute(query, (grade, letter), fetch=True)
 
     async def get_homework_by_id(self, hw_id):
-        return await self._execute("SELECT * FROM homework WHERE id = ?", (hw_id,))
+        return await self._execute(
+            "SELECT * FROM homework WHERE id = ?", (hw_id,), fetchone=True
+        )
 
     # --- Работа с решениями ---
     async def add_solution(self, homework_id, author_id, text, is_anonymous):

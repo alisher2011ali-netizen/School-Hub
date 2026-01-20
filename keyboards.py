@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 def get_confirm_kb():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="✅ Да"), KeyboardButton(text="❌ Нет")]],
+        keyboard=[[KeyboardButton(text="✅ Да, верно"), KeyboardButton(text="❌ Нет")]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -63,8 +63,12 @@ def get_subjects_kb(subjects):
 
 
 def get_skip_photo_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Пропустить фото")]], resize_keyboard=True
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Пропустить фото")],
+            [KeyboardButton(text="❌ Отмена")],
+        ],
+        resize_keyboard=True,
     )
 
 
@@ -146,5 +150,32 @@ def get_solution_votes_kb(sol_id, ups=0, downs=0):
 
 def get_finish_content_kb():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Готово ✅")]], resize_keyboard=True
+        keyboard=[
+            [KeyboardButton(text="Готово ✅")],
+            [KeyboardButton(text="❌ Отмена")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_cancel_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Отмена")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def get_settings_change_kb():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📝 Изменить класс", callback_data="change_grade"
+                ),
+                InlineKeyboardButton(
+                    text="📝 Изменить имя", callback_data="change_name"
+                ),
+            ]
+        ]
     )

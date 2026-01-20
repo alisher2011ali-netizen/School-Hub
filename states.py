@@ -27,3 +27,8 @@ class BanUser(StatesGroup):
     waiting_for_unban_id = State()
     waiting_for_promote_id = State()
     waiting_for_promote_status = State()
+
+
+class SettingsStates(StatesGroup):
+    waiting_for_new_grade = State()
+    waiting_for_new_name = State()

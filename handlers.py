@@ -21,17 +21,51 @@ if SUPER_ADMIN_ID is None:
 
 
 @router.message(Command("cancel"))
+@router.message(F.text == "❌ Отмена")
 @router.message(F.text.casefold() == "отмена")
-async def cancel_handler(message: Message, state: FSMContext):
+async def cmd_cancel(message: Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is None:
+        await message.answer("Вы уже в главном меню.", reply_markup=get_main_menu_kb())
         return
 
     await state.clear()
     await message.answer(
-        "Действие отменено. Мы снова в главном меню.",
+        "Действие отменено. Вы снова в главном меню.",
         reply_markup=get_main_menu_kb(),
     )
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message, db: Database):
+    user = await db.get_user(message.from_user.id)
+
+    help_text = [
+        "<b>📚 Доступные команды:</b>",
+        "/start - Перезапустить бота",
+        "/profile - Мои данные и репутация",
+        "/help - Список всех команд",
+        "/cancel - Отменить текущее действие",
+        "",
+        "<b>🛠 Функционал:</b>",
+        "• Кнопки под заданиями позволяют добавлять решения или жаловаться.",
+        "• В профиле можно увидеть свои баллы.",
+    ]
+
+    if user and user.get("is_admin"):
+        help_text.extend(
+            [
+                "",
+                "<b>⚡ Админ-панель:</b>",
+                "/ban - Забанить пользователя",
+                "/unban - Разбанить пользователя",
+                "/promote - Управление правами админа (только для главного админа)",
+                "/del_hw - Удалить задание",
+                "/del_sol - Удалить решение",
+            ]
+        )
+
+    await message.answer("\n".join(help_text))
 
 
 @router.message(CommandStart())
@@ -97,7 +131,6 @@ async def confirm_registration(message: Message, state: FSMContext):
         await message.answer(
             "Отлично! Теперь введи свои <b>Имя и Фамилию</b>:",
             reply_markup=ReplyKeyboardRemove(),
-            parse_mode="HTML",
         )
         await state.set_state(Registration.waiting_for_name)
     else:
@@ -115,7 +148,6 @@ async def confirm_registration(message: Message, state: FSMContext):
     await message.answer(
         "Отлично! Теперь введи свои <b>Имя и Фамилию</b>:",
         reply_markup=ReplyKeyboardRemove(),
-        parse_mode="HTML",
     )
     await state.set_state(Registration.waiting_for_name)
 
@@ -126,13 +158,13 @@ async def name_chosen(message: Message, state: FSMContext, db: Database):
         await message.answer("Слишком длинное имя. Попробуй покороче.")
         return
 
-    names = message.text.split()
+    names = message.text.split().split()
     if len(names) < 2:
         await message.answer("Пожалуйста, введи и Имя, и Фамилию через пробел.")
         return
 
     first_name = names[0][:20]
-    last_name = names[1][:20]
+    last_name = "".join(names[1:][:20])
 
     data = await state.get_data()
     await db.register_user(
@@ -150,6 +182,7 @@ async def name_chosen(message: Message, state: FSMContext, db: Database):
     await state.clear()
 
 
+@router.message(Command("profile"))
 @router.message(F.text == "👤 Профиль")
 async def show_profile(message: Message, db: Database):
     if not message.from_user:
@@ -185,10 +218,71 @@ async def show_profile(message: Message, db: Database):
         f"🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
         f"🏆 <b>Ранг:</b> {rank}\n\n"
         f"<i>Статус: {'Администратор' if user['is_admin'] else 'Ученик'}</i>"
-        f" <i>{status}</i>"
+        f" <i>{status}</i>\n\n"
+        f"<i>Изменить профиль можно через настройки /settings</i>"
     )
 
     await message.answer(text)
+
+
+@router.message(Command("settings"))
+@router.message(F.text == "⚙️ Настройки")
+async def show_settings(message: Message):
+    await message.answer(
+        "Здесь ты можешь изменить свои данные:", reply_markup=get_settings_change_kb()
+    )
+
+
+@router.callback_query(F.data == "change_grade")
+async def start_change_class(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer(
+        "Введи свой новый класс и букву (например, 10-А):", reply_markup=get_cancel_kb()
+    )
+    await state.set_state(SettingsStates.waiting_for_new_grade)
+    await callback.answer()
+
+
+@router.message(SettingsStates.waiting_for_new_grade)
+async def process_change_grade(message: Message, state: FSMContext, db: Database):
+    match = re.match(r"^(\d{1,2})[-\s]?([А-Яа-яA-Za-z])$", message.text)
+
+    if not match:
+        await message.answer("❌ Неверный формат! Напиши как в примере: 10-А")
+        return
+
+    grade, letter = match.groups()
+
+    await db.update_user_grade(message.from_user.id, int(grade), letter.upper())
+
+    await message.answer(f"✅ Готово! Теперь твой класс: {grade}-{letter.upper()}")
+    await state.clear()
+
+
+@router.callback_query(F.data == "change_name")
+async def start_change_name(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введи новое имя:", reply_markup=get_cancel_kb())
+    await state.set_state(SettingsStates.waiting_for_new_name)
+    await callback.answer()
+
+
+@router.message(SettingsStates.waiting_for_new_name)
+async def process_change_name(message: Message, state: FSMContext, db: Database):
+    if len(message.text) > 40:
+        await message.answer("Слишком длинное имя. Попробуй покороче.")
+        return
+
+    names = message.text.strip().split()
+    if len(names) < 2:
+        await message.answer("Пожалуйста, введи и Имя, и Фамилию через пробел.")
+        return
+
+    first_name = names[0][:20]
+    last_name = "".join(names[1:][:20])
+
+    await db.update_user_name(message.from_user.id, first_name, last_name)
+
+    await message.answer(f"✅ Готово! Теперь твое имя: {first_name} {last_name}")
+    await state.clear()
 
 
 @router.message(F.text == "➕ Добавить ДЗ")
@@ -214,7 +308,7 @@ async def start_add_hw(message: Message, state: FSMContext, db: Database):
 @router.message(AddHomework.waiting_for_subject)
 async def hw_subject_chosen(message: Message, state: FSMContext):
     await state.update_data(subject_name=message.text)
-    await message.answer("Введите текст задания: ", reply_markup=ReplyKeyboardRemove())
+    await message.answer("Введите текст задания: ", reply_markup=get_cancel_kb())
     await state.set_state(AddHomework.waiting_for_text)
 
 
@@ -375,13 +469,18 @@ async def show_homework(message: Message, db: Database):
 
 @router.callback_query(F.data.startswith("report_hw"))
 async def handle_hw_report(callback: CallbackQuery, db: Database, bot: Bot):
-    await callback.answer("Жалоба отправлена модераторам", show_alert=True)
-
     hw_id = int(callback.data.replace("report_hw_", ""))
     reporter_id = callback.from_user.id
 
     hw = await db.get_homework_by_id(hw_id)
+
+    if not hw:
+        await callback.answer("Ошибка: задание не найдено.", show_alert=True)
+        return
+
+    await callback.answer("Жалоба отправлена модераторам", show_alert=True)
     reason = "Жалоба на домашнее задание"
+
     await db.add_report(
         reporter_id=reporter_id,
         target_id=hw["author_id"],
@@ -394,10 +493,10 @@ async def handle_hw_report(callback: CallbackQuery, db: Database, bot: Bot):
         SUPER_ADMIN_ID,
         f"⚠️ <b>Жалоба на <i>задание</i>!</b>\n"
         f"ID домашнего задания: <code>{hw_id}</code>\n"
-        f"Отправитель: {callback.from_user.full_name}\n"
-        f"На кого жалоба: {hw["author_id"]}\n"
-        f"Текст жалобы:\n<q>{reason}</q>\n\n"
-        f"Используй /ban <code>{callback.hw["author_id"]}</code> или /del_sol <code>{hw_id}</code>",
+        f"Отправитель: {callback.from_user.id}\n"
+        f"На кого жалоба: {hw['author_id']}\n"
+        f"Текст жалобы:\n<blockquote>{reason}</blockquote>\n"
+        f"Используй /ban <code>{hw['author_id']}</code> или /del_sol <code>{hw_id}</code>",
         parse_mode="HTML",
     )
 
@@ -422,7 +521,9 @@ async def handle_solve_button(callback: CallbackQuery, state: FSMContext, db: Da
     hw_id = callback.data.split("_")[1]
     await state.update_data(hw_id=hw_id)
 
-    await callback.message.answer("Отлично! Пришли текст решения или фото:")
+    await callback.message.answer(
+        "Отлично! Пришли текст решения или фото:", reply_markup=get_cancel_kb()
+    )
     await state.set_state(AddSolution.waiting_for_content)
     await callback.answer()
 
@@ -535,7 +636,7 @@ async def view_solutions(callback: CallbackQuery, db: Database):
 
 @router.callback_query(F.data.startswith("vote_"))
 async def handle_vote(callback: CallbackQuery, db: Database):
-    user = await db.get_user(callback.message.from_user.id)
+    user = await db.get_user(callback.from_user.id)
 
     if user.get("is_banned"):
         await callback.answer(
@@ -579,17 +680,37 @@ async def handle_vote(callback: CallbackQuery, db: Database):
 
 
 @router.callback_query(F.data.startswith("report_sol"))
-async def handle_sol_report(callback: CallbackQuery, bot: Bot):
+async def handle_hw_report(callback: CallbackQuery, db: Database, bot: Bot):
     sol_id = int(callback.data.replace("report_sol_", ""))
+    reporter_id = callback.from_user.id
+
+    sol = await db.get_solution_by_id(sol_id)
+
+    if not sol:
+        await callback.answer(
+            "Ошибка: решение не найдено. Возможно его уже удалили.", show_alert=True
+        )
+        return
 
     await callback.answer("Жалоба отправлена модераторам", show_alert=True)
+    reason = "Жалоба на решение домашнего задания"
+
+    await db.add_report(
+        reporter_id=reporter_id,
+        target_id=sol["author_id"],
+        type="solution",
+        sol_or_hw_id=sol_id,
+        reason=reason,
+    )
 
     await bot.send_message(
         SUPER_ADMIN_ID,
-        f"⚠️ <b>Жалоба на решение!</b>\n"
-        f"ID решения: <code>{sol_id}</code>\n"
-        f"Отправитель: {callback.from_user.full_name}\n\n"
-        f"Используй /ban <code>{callback.from_user.id}</code> или /del_sol <code>{sol_id}</code>",
+        f"⚠️ <b>Жалоба на <i>решение</i>!</b>\n"
+        f"ID домашнего задания: <code>{sol_id}</code>\n"
+        f"Отправитель: {callback.from_user.id}\n"
+        f"На кого жалоба: {sol['author_id']}\n"
+        f"Текст жалобы:\n<blockquote>{reason}</blockquote>\n"
+        f"Используй /ban <code>{sol['author_id']}</code> или /del_sol <code>{sol_id}</code>",
         parse_mode="HTML",
     )
 
